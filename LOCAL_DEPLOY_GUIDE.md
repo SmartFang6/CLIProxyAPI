@@ -139,6 +139,12 @@ Niubao123
 
 这个值只是在“第一次初始化时”写进你的本地配置文件，不是仓库写死的神秘默认值。
 
+只有在下面这些条件同时满足时，默认值才会生效：
+
+- 当前机器上不存在旧的 `~/.cli-proxy-api/config.yaml`
+- 当前机器上不存在新的 `~/.config/cliproxyapi-local/config.yaml`
+- 启动前没有设置 `CLIPROXY_MANAGEMENT_KEY`
+
 真正生效的是：
 
 ```bash
@@ -146,6 +152,14 @@ Niubao123
 ```
 
 建议首次启动后尽快改掉。
+
+如果你希望第一次启动时就指定自己的管理密码，可以直接这样执行：
+
+```bash
+CLIPROXY_MANAGEMENT_KEY='你的强密码' ./scripts/cliproxy-local.sh start
+```
+
+如果配置文件已经存在，脚本会保留已有密码，不会每次启动都重新改写。
 
 ## 5. 常用命令
 
