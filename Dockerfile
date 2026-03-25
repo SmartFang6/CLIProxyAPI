@@ -1,4 +1,8 @@
-FROM golang:1.26-alpine AS builder
+ARG BASE_REGISTRY=docker.io
+ARG GOLANG_IMAGE=library/golang:1.26-alpine
+ARG ALPINE_IMAGE=library/alpine:3.22.0
+
+FROM ${BASE_REGISTRY}/${GOLANG_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -14,7 +18,7 @@ ARG BUILD_DATE=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPI ./cmd/server/
 
-FROM alpine:3.22.0
+FROM ${BASE_REGISTRY}/${ALPINE_IMAGE}
 
 RUN apk add --no-cache tzdata
 
