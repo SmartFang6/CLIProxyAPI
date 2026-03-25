@@ -16,6 +16,7 @@ fi
 CONFIG_PATH="${BASE_DIR}/config.yaml"
 AUTH_PATH="${BASE_DIR}/auths"
 LOG_PATH="${BASE_DIR}/logs"
+USAGE_EXPORT_PATH="${BASE_DIR}/usage-export.json"
 COMPOSE_OVERRIDE_PATH="${BASE_DIR}/docker-compose.local.yml"
 SERVICE_NAME="cli-proxy-api"
 DEFAULT_BRANCH="main"
@@ -35,6 +36,103 @@ SYNC_ACTION="no_update"
 
 say() {
   printf '[cliproxy-local] %s\n' "$*"
+}
+
+management_key_plaintext() {
+  if [[ -n "${CLIPROXY_MANAGEMENT_KEY:-}" ]]; then
+    printf '%s\n' "${CLIPROXY_MANAGEMENT_KEY}"
+    return 0
+  fi
+
+  if [[ -n "${DEFAULT_MANAGEMENT_KEY:-}" ]]; then
+    printf '%s\n' "${DEFAULT_MANAGEMENT_KEY}"
+    return 0
+  fi
+
+  python3 - "${CONFIG_PATH}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+if not path.exists():
+    sys.exit(0)
+
+text = path.read_text(encoding="utf-8")
+match = re.search(r'^\s*secret-key\s*:\s*(.+?)\s*$', text, re.MULTILINE)
+if not match:
+    sys.exit(0)
+
+value = match.group(1).strip()
+if value.startswith('"') and value.endswith('"'):
+    value = value[1:-1]
+elif value.startswith("'") and value.endswith("'"):
+    value = value[1:-1]
+
+if value.startswith("$2"):
+    sys.exit(0)
+
+print(value)
+PY
+}
+
+export_usage_statistics() {
+  [[ -f "${CONFIG_PATH}" ]] || return 0
+
+  local management_key response tmp_file url
+  management_key="$(management_key_plaintext)"
+  if [[ -z "${management_key}" ]]; then
+    say "跳过 usage 导出：当前 config.yaml 里的管理密钥已哈希，脚本拿不到明文。"
+    return 0
+  fi
+
+  url="http://127.0.0.1:${PORT_8317}/v0/management/usage/export"
+  tmp_file="${USAGE_EXPORT_PATH}.tmp"
+  if ! response="$(curl -sS -w '%{http_code}' -H "X-Management-Key: ${management_key}" "${url}" -o "${tmp_file}" 2>/dev/null)"; then
+    rm -f "${tmp_file}"
+    say "跳过 usage 导出：当前服务还没起来或 management API 不可达。"
+    return 0
+  fi
+
+  if [[ "${response}" != "200" ]]; then
+    rm -f "${tmp_file}"
+    say "跳过 usage 导出：management API 返回 HTTP ${response}。"
+    return 0
+  fi
+
+  mv "${tmp_file}" "${USAGE_EXPORT_PATH}"
+  say "已导出 usage 统计到 ${USAGE_EXPORT_PATH}"
+}
+
+import_usage_statistics() {
+  [[ -f "${USAGE_EXPORT_PATH}" ]] || return 0
+  [[ -f "${CONFIG_PATH}" ]] || return 0
+
+  local management_key response url body
+  management_key="$(management_key_plaintext)"
+  if [[ -z "${management_key}" ]]; then
+    say "跳过 usage 导入：当前 config.yaml 里的管理密钥已哈希，脚本拿不到明文。"
+    return 0
+  fi
+
+  url="http://127.0.0.1:${PORT_8317}/v0/management/usage/import"
+  if ! response="$(curl -sS -w $'\n%{http_code}' -X POST \
+      -H "X-Management-Key: ${management_key}" \
+      -H 'Content-Type: application/json' \
+      --data @"${USAGE_EXPORT_PATH}" \
+      "${url}" 2>/dev/null)"; then
+    say "跳过 usage 导入：management API 不可达。"
+    return 0
+  fi
+
+  body="${response%$'\n'*}"
+  response="${response##*$'\n'}"
+  if [[ "${response}" != "200" ]]; then
+    say "跳过 usage 导入：management API 返回 HTTP ${response}。"
+    return 0
+  fi
+
+  say "已导入 usage 统计：${body}"
 }
 
 usage() {
@@ -423,6 +521,7 @@ show_status() {
   配置文件：${CONFIG_PATH}
   认证目录：${AUTH_PATH}
   日志目录：${LOG_PATH}
+  Usage 备份：${USAGE_EXPORT_PATH}
   override 文件：${COMPOSE_OVERRIDE_PATH}
   运行态环境：${RUNTIME_ENV_FILE}
 
@@ -444,12 +543,14 @@ start_service() {
   else
     compose up -d --remove-orphans
   fi
+  import_usage_statistics
   show_status
 }
 
 stop_service() {
   ensure_docker
   prepare_local_runtime
+  export_usage_statistics
   compose down
 }
 
@@ -468,12 +569,14 @@ update_service() {
   ensure_clean_repo_for_update
   ensure_docker
   prepare_local_runtime
+  export_usage_statistics
   sync_upstream_if_needed
   if [[ "${SYNC_ACTION}" == "updated" ]]; then
     compose up -d --build --remove-orphans
   else
     compose up -d --remove-orphans
   fi
+  import_usage_statistics
   show_status
 }
 
