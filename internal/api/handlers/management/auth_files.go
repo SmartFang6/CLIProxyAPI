@@ -541,10 +541,23 @@ func isRuntimeOnlyAuth(auth *coreauth.Auth) bool {
 	return strings.EqualFold(strings.TrimSpace(auth.Attributes["runtime_only"]), "true")
 }
 
+func isUnsafeAuthFileName(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return true
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return true
+	}
+	if filepath.VolumeName(name) != "" {
+		return true
+	}
+	return false
+}
+
 // Download single auth file by name
 func (h *Handler) DownloadAuthFile(c *gin.Context) {
-	name := c.Query("name")
-	if name == "" || strings.Contains(name, string(os.PathSeparator)) {
+	name := strings.TrimSpace(c.Query("name"))
+	if isUnsafeAuthFileName(name) {
 		c.JSON(400, gin.H{"error": "invalid name"})
 		return
 	}
@@ -626,8 +639,8 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no files uploaded"})
 		return
 	}
-	name := c.Query("name")
-	if name == "" || strings.Contains(name, string(os.PathSeparator)) {
+	name := strings.TrimSpace(c.Query("name"))
+	if isUnsafeAuthFileName(name) {
 		c.JSON(400, gin.H{"error": "invalid name"})
 		return
 	}
@@ -801,13 +814,7 @@ func requestedAuthFileNamesForDelete(c *gin.Context) ([]string, error) {
 	if c == nil {
 		return nil, nil
 	}
-	queryRefs := make([]string, 0)
-	queryRefs = append(queryRefs, c.QueryArray("name")...)
-	queryRefs = append(queryRefs, c.QueryArray("id")...)
-	queryRefs = append(queryRefs, c.QueryArray("auth_index")...)
-	queryRefs = append(queryRefs, c.QueryArray("authIndex")...)
-	queryRefs = append(queryRefs, c.QueryArray("AuthIndex")...)
-	names := uniqueAuthFileNames(queryRefs)
+	names := uniqueAuthFileNames(c.QueryArray("name"))
 	if len(names) > 0 {
 		return names, nil
 	}
@@ -822,16 +829,8 @@ func requestedAuthFileNamesForDelete(c *gin.Context) ([]string, error) {
 	}
 
 	var objectBody struct {
-		Name              string   `json:"name"`
-		Names             []string `json:"names"`
-		ID                string   `json:"id"`
-		IDs               []string `json:"ids"`
-		AuthIndexSnake    string   `json:"auth_index"`
-		AuthIndexCamel    string   `json:"authIndex"`
-		AuthIndexPascal   string   `json:"AuthIndex"`
-		AuthIndicesSnake  []string `json:"auth_indices"`
-		AuthIndicesCamel  []string `json:"authIndices"`
-		AuthIndicesPascal []string `json:"AuthIndices"`
+		Name  string   `json:"name"`
+		Names []string `json:"names"`
 	}
 	if body[0] == '[' {
 		var arrayBody []string
@@ -844,35 +843,12 @@ func requestedAuthFileNamesForDelete(c *gin.Context) ([]string, error) {
 		return nil, fmt.Errorf("invalid request body")
 	}
 
-	out := make([]string, 0, len(objectBody.Names)+len(objectBody.IDs)+len(objectBody.AuthIndicesSnake)+len(objectBody.AuthIndicesCamel)+len(objectBody.AuthIndicesPascal)+4)
+	out := make([]string, 0, len(objectBody.Names)+1)
 	if strings.TrimSpace(objectBody.Name) != "" {
 		out = append(out, objectBody.Name)
 	}
-	if strings.TrimSpace(objectBody.ID) != "" {
-		out = append(out, objectBody.ID)
-	}
-	if authIndex := firstNonEmptyDeleteValue(
-		objectBody.AuthIndexSnake,
-		objectBody.AuthIndexCamel,
-		objectBody.AuthIndexPascal,
-	); authIndex != "" {
-		out = append(out, authIndex)
-	}
 	out = append(out, objectBody.Names...)
-	out = append(out, objectBody.IDs...)
-	out = append(out, objectBody.AuthIndicesSnake...)
-	out = append(out, objectBody.AuthIndicesCamel...)
-	out = append(out, objectBody.AuthIndicesPascal...)
 	return uniqueAuthFileNames(out), nil
-}
-
-func firstNonEmptyDeleteValue(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 func uniqueAuthFileNames(names []string) []string {
@@ -897,7 +873,7 @@ func uniqueAuthFileNames(names []string) []string {
 
 func (h *Handler) deleteAuthFileByName(ctx context.Context, name string) (string, int, error) {
 	name = strings.TrimSpace(name)
-	if name == "" {
+	if isUnsafeAuthFileName(name) {
 		return "", http.StatusBadRequest, fmt.Errorf("invalid name")
 	}
 
@@ -905,14 +881,9 @@ func (h *Handler) deleteAuthFileByName(ctx context.Context, name string) (string
 	targetID := ""
 	if targetAuth := h.findAuthForDelete(name); targetAuth != nil {
 		targetID = strings.TrimSpace(targetAuth.ID)
-		if fileName := strings.TrimSpace(targetAuth.FileName); fileName != "" {
-			name = filepath.Base(fileName)
-		}
 		if path := strings.TrimSpace(authAttribute(targetAuth, "path")); path != "" {
 			targetPath = path
 		}
-	} else if strings.Contains(name, string(os.PathSeparator)) {
-		return "", http.StatusBadRequest, fmt.Errorf("invalid name")
 	}
 	if !filepath.IsAbs(targetPath) {
 		if abs, errAbs := filepath.Abs(targetPath); errAbs == nil {
@@ -951,10 +922,6 @@ func (h *Handler) findAuthForDelete(name string) *coreauth.Auth {
 	for _, auth := range auths {
 		if auth == nil {
 			continue
-		}
-		auth.EnsureIndex()
-		if auth.Index == name {
-			return auth
 		}
 		if strings.TrimSpace(auth.FileName) == name {
 			return auth
