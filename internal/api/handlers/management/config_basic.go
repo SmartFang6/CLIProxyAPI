@@ -1,10 +1,12 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,8 +20,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
+var (
 	latestReleaseURL       = "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest"
+	latestReleasePageURL   = "https://github.com/router-for-me/CLIProxyAPI/releases/latest"
 	latestReleaseUserAgent = "CLIProxyAPI"
 )
 
@@ -58,6 +61,10 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if version, fallbackErr := fetchLatestVersionFromReleasePage(c.Request.Context(), client); fallbackErr == nil {
+			c.JSON(http.StatusOK, gin.H{"latest-version": version})
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "request_failed", "message": err.Error()})
 		return
 	}
@@ -69,6 +76,10 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if version, fallbackErr := fetchLatestVersionFromReleasePage(c.Request.Context(), client); fallbackErr == nil {
+			c.JSON(http.StatusOK, gin.H{"latest-version": version})
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "unexpected_status", "message": fmt.Sprintf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))})
 		return
 	}
@@ -89,6 +100,51 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"latest-version": version})
+}
+
+func fetchLatestVersionFromReleasePage(ctx context.Context, client *http.Client) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleasePageURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create fallback request: %w", err)
+	}
+	req.Header.Set("User-Agent", latestReleaseUserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("execute fallback request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.Request == nil || resp.Request.URL == nil {
+		return "", fmt.Errorf("missing fallback response url")
+	}
+
+	version := extractReleaseVersionFromURL(resp.Request.URL)
+	if version == "" {
+		return "", fmt.Errorf("missing release version in fallback url %q", resp.Request.URL.String())
+	}
+
+	return version, nil
+}
+
+func extractReleaseVersionFromURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i := 0; i < len(parts)-1; i++ {
+		if parts[i] == "tag" {
+			version := strings.TrimSpace(parts[i+1])
+			if version != "" {
+				return version
+			}
+		}
+	}
+
+	return ""
 }
 
 func WriteConfig(path string, data []byte) error {
