@@ -4,7 +4,7 @@ cli-proxy-api
 cliproxyapi-dx4600pro-amd64.tar
 
 # Configuration
-config.yaml
+# config.yaml
 .env
 
 # Generated content
