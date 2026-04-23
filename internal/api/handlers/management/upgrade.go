@@ -1,6 +1,7 @@
 package management
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,11 @@ var (
 	triggerUpgradeJob   = defaultTriggerUpgradeJob
 	checkUpgradeReady   = defaultCheckUpgradeReady
 )
+
+type containerMount struct {
+	Source      string `json:"Source"`
+	Destination string `json:"Destination"`
+}
 
 func (h *Handler) PostUpgrade(c *gin.Context) {
 	if h == nil {
@@ -72,6 +78,11 @@ func defaultTriggerUpgradeJob() (string, error) {
 		return "", fmt.Errorf("upgrade script not found: %w", err)
 	}
 
+	mounts, err := resolveHostMounts()
+	if err != nil {
+		return "", err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(upgradeLogPath), 0o755); err != nil {
 		return "", fmt.Errorf("prepare upgrade log directory: %w", err)
 	}
@@ -88,10 +99,21 @@ func defaultTriggerUpgradeJob() (string, error) {
 		"docker", "compose", "run",
 		"-d", "--rm",
 		"-e", "ALLOW_DIRTY_WORKTREE=true",
+		"-e", "HOST_WORKSPACE_PATH="+mounts.workspace,
+		"-e", "CLI_PROXY_CONFIG_PATH="+mounts.configFile,
+		"-e", "CLI_PROXY_AUTH_PATH="+mounts.authDir,
+		"-e", "CLI_PROXY_LOG_PATH="+mounts.logsDir,
 		"cli-proxy-updater",
 		"sh", "-lc", runCommand,
 	)
 	cmd.Dir = upgradeWorkspaceDir
+	cmd.Env = append(
+		os.Environ(),
+		"HOST_WORKSPACE_PATH="+mounts.workspace,
+		"CLI_PROXY_CONFIG_PATH="+mounts.configFile,
+		"CLI_PROXY_AUTH_PATH="+mounts.authDir,
+		"CLI_PROXY_LOG_PATH="+mounts.logsDir,
+	)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -104,6 +126,60 @@ func defaultTriggerUpgradeJob() (string, error) {
 	}
 
 	return jobID, nil
+}
+
+type hostMounts struct {
+	workspace  string
+	configFile string
+	authDir    string
+	logsDir    string
+}
+
+func resolveHostMounts() (*hostMounts, error) {
+	containerID, err := os.Hostname()
+	if err != nil {
+		return nil, fmt.Errorf("resolve current container id: %w", err)
+	}
+
+	cmd := exec.Command("docker", "inspect", "--format", "{{json .Mounts}}", containerID)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("inspect current container mounts: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	var mounts []containerMount
+	if err := json.Unmarshal(output, &mounts); err != nil {
+		return nil, fmt.Errorf("decode current container mounts: %w", err)
+	}
+
+	result := &hostMounts{}
+	for _, mount := range mounts {
+		switch mount.Destination {
+		case "/workspace":
+			result.workspace = mount.Source
+		case "/CLIProxyAPI/config.yaml":
+			result.configFile = mount.Source
+		case "/root/.cli-proxy-api":
+			result.authDir = mount.Source
+		case "/CLIProxyAPI/logs":
+			result.logsDir = mount.Source
+		}
+	}
+
+	if strings.TrimSpace(result.workspace) == "" {
+		return nil, fmt.Errorf("unable to resolve host workspace path from current container mounts")
+	}
+	if strings.TrimSpace(result.configFile) == "" {
+		result.configFile = filepath.Join(result.workspace, "config.yaml")
+	}
+	if strings.TrimSpace(result.authDir) == "" {
+		result.authDir = filepath.Join(result.workspace, "auths")
+	}
+	if strings.TrimSpace(result.logsDir) == "" {
+		result.logsDir = filepath.Join(result.workspace, "logs")
+	}
+
+	return result, nil
 }
 
 func defaultCheckUpgradeReady() error {

@@ -25,7 +25,7 @@ services:
       - ${CLI_PROXY_CONFIG_PATH:-./config.yaml}:/CLIProxyAPI/config.yaml
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
-      - .:/workspace
+      - ${HOST_WORKSPACE_PATH:-.}:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
@@ -38,5 +38,5 @@ services:
       dockerfile: Dockerfile.updater
     working_dir: /workspace
     volumes:
-      - .:/workspace
+      - ${HOST_WORKSPACE_PATH:-.}:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
