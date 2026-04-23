@@ -1,0 +1,8 @@
+ARG BASE_REGISTRY=docker.io
+ARG ALPINE_IMAGE=library/alpine:3.22.0
+
+FROM ${BASE_REGISTRY}/${ALPINE_IMAGE}
+
+RUN apk add --no-cache bash git docker-cli docker-cli-compose
+
+WORKDIR /workspace

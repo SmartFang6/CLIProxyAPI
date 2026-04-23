@@ -128,7 +128,7 @@ rebuild_and_restart() {
   log "BUILD_DATE=${BUILD_DATE}"
   log "CLI_PROXY_IMAGE=${CLI_PROXY_IMAGE}"
 
-  docker compose build
+  docker compose build cli-proxy-api cli-proxy-updater
   docker compose up -d --force-recreate --remove-orphans --pull never
 }
 

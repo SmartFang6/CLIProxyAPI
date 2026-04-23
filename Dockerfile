@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.Version=${VERSION
 
 FROM ${BASE_REGISTRY}/${ALPINE_IMAGE}
 
-RUN apk add --no-cache tzdata
+RUN apk add --no-cache tzdata git docker-cli docker-cli-compose
 
 RUN mkdir /CLIProxyAPI
 
