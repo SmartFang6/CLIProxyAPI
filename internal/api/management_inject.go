@@ -8,19 +8,89 @@ const managementUpgradeInjectionScript = `
 <script ` + managementUpgradeInjectionMarker + `="true">
 (function () {
   const AUTH_STORE_KEY = 'cli-proxy-auth';
+  const SECURE_STORAGE_PREFIX = 'enc::v1::';
+  const SECURE_STORAGE_SALT = 'cli-proxy-api-webui::secure-storage';
   const UPGRADE_ROUTE = '/v0/management/upgrade';
   const VERSION_ROUTE = '/v0/management/latest-version';
 
+  let secureStorageKeyCache = null;
+
+  function encodeText(value) {
+    return new TextEncoder().encode(value);
+  }
+
+  function decodeText(bytes) {
+    return new TextDecoder().decode(bytes);
+  }
+
+  function getSecureStorageKey() {
+    if (secureStorageKeyCache) return secureStorageKeyCache;
+    try {
+      secureStorageKeyCache = encodeText(SECURE_STORAGE_SALT + '|' + window.location.host + '|' + navigator.userAgent);
+    } catch (_) {
+      secureStorageKeyCache = encodeText(SECURE_STORAGE_SALT);
+    }
+    return secureStorageKeyCache;
+  }
+
+  function xorBytes(input, key) {
+    const output = new Uint8Array(input.length);
+    for (let i = 0; i < input.length; i += 1) {
+      output[i] = input[i] ^ key[i % key.length];
+    }
+    return output;
+  }
+
+  function fromBase64(value) {
+    const decoded = atob(value);
+    const bytes = new Uint8Array(decoded.length);
+    for (let i = 0; i < decoded.length; i += 1) {
+      bytes[i] = decoded.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  function decryptStoredValue(value) {
+    if (!value || typeof value !== 'string' || !value.startsWith(SECURE_STORAGE_PREFIX)) {
+      return value;
+    }
+
+    try {
+      const raw = value.slice(SECURE_STORAGE_PREFIX.length);
+      const decoded = fromBase64(raw);
+      return decodeText(xorBytes(decoded, getSecureStorageKey()));
+    } catch (_) {
+      return value;
+    }
+  }
+
+  function readStorageItem(key, options) {
+    const config = options || {};
+    const useDecrypt = config.decrypt !== false;
+    const raw = localStorage.getItem(key);
+    if (raw == null) return null;
+
+    try {
+      const parsed = useDecrypt ? decryptStoredValue(raw) : raw;
+      return JSON.parse(parsed);
+    } catch (_) {
+      try {
+        return useDecrypt ? decryptStoredValue(raw) : raw;
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+
   function readPersistedAuth() {
     try {
-      const raw = localStorage.getItem(AUTH_STORE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
+      const parsed = readStorageItem(AUTH_STORE_KEY);
+      if (parsed) {
         const state = parsed && parsed.state ? parsed.state : parsed;
         if (state && typeof state === 'object') {
           return {
-            apiBase: typeof state.apiBase === 'string' ? state.apiBase : '',
-            managementKey: typeof state.managementKey === 'string' ? state.managementKey : ''
+            apiBase: typeof state.apiBase === 'string' ? state.apiBase : (readStorageItem('apiBase') || readStorageItem('apiUrl', { decrypt: true }) || ''),
+            managementKey: typeof state.managementKey === 'string' ? state.managementKey : (readStorageItem('managementKey') || '')
           };
         }
       }
@@ -29,8 +99,8 @@ const managementUpgradeInjectionScript = `
     }
 
     return {
-      apiBase: localStorage.getItem('apiBase') || '',
-      managementKey: localStorage.getItem('managementKey') || ''
+      apiBase: readStorageItem('apiBase') || readStorageItem('apiUrl', { decrypt: true }) || '',
+      managementKey: readStorageItem('managementKey') || ''
     };
   }
 
