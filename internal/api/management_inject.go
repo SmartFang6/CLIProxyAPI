@@ -114,6 +114,14 @@ const managementUpgradeInjectionScript = `
     return cleaned;
   }
 
+  function normalizeVersion(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    const match = raw.match(/^v?\d+\.\d+\.\d+/);
+    return match ? match[0] : raw;
+  }
+
   function showMessage(message, type) {
     const background = type === 'error' ? '#4b1f1f' : type === 'success' ? '#183d2a' : '#2d251d';
     const border = type === 'error' ? '#c65746' : type === 'success' ? '#16a34a' : '#8b8680';
@@ -189,7 +197,16 @@ const managementUpgradeInjectionScript = `
           throw new Error('未获取到最新版本号');
         }
 
-        if (currentVersion && currentVersion === latestVersion) {
+        const normalizedCurrentVersion = normalizeVersion(currentVersion);
+        const normalizedLatestVersion = normalizeVersion(latestVersion);
+
+        if (
+          currentVersion &&
+          (
+            currentVersion === latestVersion ||
+            (normalizedCurrentVersion && normalizedCurrentVersion === normalizedLatestVersion)
+          )
+        ) {
           showMessage('当前已经是最新版本：' + currentVersion, 'success');
           return;
         }
