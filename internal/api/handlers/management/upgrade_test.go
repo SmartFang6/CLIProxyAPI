@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -40,11 +41,22 @@ func TestPostUpgradeStartsDetachedJob(t *testing.T) {
 func TestPostUpgradeRejectsDuplicateRequests(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	originalLockPath := upgradeLockPath
+	tmpDir := t.TempDir()
+	upgradeLockPath = tmpDir + "/oneclick-upgrade.lock"
+	t.Cleanup(func() {
+		upgradeLockPath = originalLockPath
+	})
+
+	if err := os.WriteFile(upgradeLockPath, []byte("locked"), 0o644); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/upgrade", nil)
 
-	handler := &Handler{cfg: &config.Config{}, upgradeInProgress: true}
+	handler := &Handler{cfg: &config.Config{}}
 	handler.PostUpgrade(ctx)
 
 	if recorder.Code != http.StatusConflict {

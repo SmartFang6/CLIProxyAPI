@@ -15,6 +15,7 @@ var (
 	upgradeWorkspaceDir = "/workspace"
 	upgradeScriptPath   = "/workspace/scripts/update-main-and-docker.sh"
 	upgradeLogPath      = "/workspace/logs/oneclick-upgrade.log"
+	upgradeLockPath     = "/workspace/logs/oneclick-upgrade.lock"
 	triggerUpgradeJob   = defaultTriggerUpgradeJob
 	checkUpgradeReady   = defaultCheckUpgradeReady
 )
@@ -30,22 +31,15 @@ func (h *Handler) PostUpgrade(c *gin.Context) {
 		return
 	}
 
-	h.upgradeMu.Lock()
-	if h.upgradeInProgress {
-		h.upgradeMu.Unlock()
+	if upgradeRunning() {
 		c.JSON(409, gin.H{
 			"error":   "upgrade_in_progress",
 			"message": "升级任务已经在进行中，请稍后刷新页面查看结果",
 		})
 		return
 	}
-	h.upgradeInProgress = true
-	h.upgradeMu.Unlock()
 
 	if err := checkUpgradeReady(); err != nil {
-		h.upgradeMu.Lock()
-		h.upgradeInProgress = false
-		h.upgradeMu.Unlock()
 		c.JSON(409, gin.H{
 			"error":   "upgrade_precheck_failed",
 			"message": err.Error(),
@@ -55,9 +49,6 @@ func (h *Handler) PostUpgrade(c *gin.Context) {
 
 	jobID, err := triggerUpgradeJob()
 	if err != nil {
-		h.upgradeMu.Lock()
-		h.upgradeInProgress = false
-		h.upgradeMu.Unlock()
 		c.JSON(500, gin.H{
 			"error":   "upgrade_start_failed",
 			"message": err.Error(),
@@ -87,9 +78,16 @@ func defaultTriggerUpgradeJob() (string, error) {
 		return "", fmt.Errorf("prepare upgrade log directory: %w", err)
 	}
 
+	identity := resolveGitIdentity()
 	runCommand := fmt.Sprintf(
-		"mkdir -p %s && chmod +x %s && ALLOW_DIRTY_WORKTREE=true %s >> %s 2>&1",
+		"mkdir -p %s && touch %s && trap 'rm -f %s' EXIT && export GIT_AUTHOR_NAME=%s GIT_COMMITTER_NAME=%s GIT_AUTHOR_EMAIL=%s GIT_COMMITTER_EMAIL=%s && chmod +x %s && ALLOW_DIRTY_WORKTREE=true %s >> %s 2>&1",
 		shellEscape(filepath.Dir(upgradeLogPath)),
+		shellEscape(upgradeLockPath),
+		shellEscape(upgradeLockPath),
+		shellEscape(identity.name),
+		shellEscape(identity.name),
+		shellEscape(identity.email),
+		shellEscape(identity.email),
 		shellEscape(upgradeScriptPath),
 		shellEscape(upgradeScriptPath),
 		shellEscape(upgradeLogPath),
@@ -126,6 +124,11 @@ func defaultTriggerUpgradeJob() (string, error) {
 	}
 
 	return jobID, nil
+}
+
+type gitIdentity struct {
+	name  string
+	email string
 }
 
 type hostMounts struct {
@@ -183,6 +186,10 @@ func resolveHostMounts() (*hostMounts, error) {
 }
 
 func defaultCheckUpgradeReady() error {
+	if upgradeRunning() {
+		return fmt.Errorf("升级任务已经在进行中，请稍后刷新页面查看结果")
+	}
+
 	cmd := exec.Command("git", "status", "--porcelain", "--untracked-files=no")
 	cmd.Dir = upgradeWorkspaceDir
 
@@ -196,6 +203,41 @@ func defaultCheckUpgradeReady() error {
 	}
 
 	return nil
+}
+
+func resolveGitIdentity() gitIdentity {
+	name := strings.TrimSpace(readGitConfig("user.name"))
+	email := strings.TrimSpace(readGitConfig("user.email"))
+
+	if name == "" {
+		name = "CLIProxyAPI Upgrade Bot"
+	}
+	if email == "" {
+		email = "noreply@cliproxy.local"
+	}
+
+	return gitIdentity{name: name, email: email}
+}
+
+func readGitConfig(key string) string {
+	cmd := exec.Command("git", "config", "--get", key)
+	cmd.Dir = upgradeWorkspaceDir
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func upgradeRunning() bool {
+	info, err := os.Stat(upgradeLockPath)
+	if err != nil {
+		return false
+	}
+	if info.IsDir() {
+		return false
+	}
+	return true
 }
 
 func shellEscape(value string) string {
