@@ -229,19 +229,6 @@ nonstream-keepalive-interval: 0
 #       - name: "kimi-k2.5"
 #         alias: "claude-opus-4.66"
 
-
-# Xiaomi MiMo via OpenAI-compatible upstream (managed by Codex)
-openai-compatibility:
-  - name: "xiaomi-mimo"
-    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
-    api-key-entries:
-      - api-key: "tp-c6x67j59tlyqbxcnecsfdv9vbekxfih2bt06hdohgo4vw41i"
-    models:
-      - name: "mimo-v2.5-pro"
-        alias: "mimo-v2.5-pro"
-      - name: "mimo-v2.5"
-        alias: "mimo-v2.5"
-
 # Vertex API keys (Vertex-compatible endpoints, base-url is optional)
 # vertex-api-key:
 #   - api-key: "vk-123..."                        # x-goog-api-key header
